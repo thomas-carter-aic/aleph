@@ -1,0 +1,26 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: aleph-system
+  labels:
+    name: aleph-system
+    app.kubernetes.io/name: aleph
+    app.kubernetes.io/part-of: aleph-platform
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: aleph-ai
+  labels:
+    name: aleph-ai
+    app.kubernetes.io/name: aleph
+    app.kubernetes.io/part-of: aleph-platform
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: aleph-paas
+  labels:
+    name: aleph-paas
+    app.kubernetes.io/name: aleph
+    app.kubernetes.io/part-of: aleph-platform
