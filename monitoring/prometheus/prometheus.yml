@@ -1,0 +1,128 @@
+# Prometheus Configuration for Aleph AI Platform
+# Comprehensive monitoring of all services and advanced patterns
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+rule_files:
+  - "alert_rules.yml"
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets:
+          - alertmanager:9093
+
+scrape_configs:
+  # Aleph Services Monitoring
+  - job_name: 'aleph-api-gateway'
+    static_configs:
+      - targets: ['api-gateway:3000']
+    metrics_path: '/metrics'
+    scrape_interval: 10s
+    scrape_timeout: 5s
+
+  - job_name: 'aleph-auth-service'
+    static_configs:
+      - targets: ['auth-service:3001']
+    metrics_path: '/metrics'
+    scrape_interval: 10s
+
+  - job_name: 'aleph-data-service'
+    static_configs:
+      - targets: ['data-service:3002']
+    metrics_path: '/metrics'
+    scrape_interval: 10s
+
+  - job_name: 'aleph-ai-service'
+    static_configs:
+      - targets: ['ai-service:3003']
+    metrics_path: '/metrics'
+    scrape_interval: 10s
+
+  - job_name: 'aleph-paas-service'
+    static_configs:
+      - targets: ['paas-service:3004']
+    metrics_path: '/metrics'
+    scrape_interval: 10s
+
+  # Infrastructure Monitoring
+  - job_name: 'postgres'
+    static_configs:
+      - targets: ['postgres:5432']
+    metrics_path: '/metrics'
+
+  - job_name: 'redis'
+    static_configs:
+      - targets: ['redis:6379']
+    metrics_path: '/metrics'
+
+  - job_name: 'kafka'
+    static_configs:
+      - targets: ['kafka:9092']
+    metrics_path: '/metrics'
+
+  # AI-Specific Monitoring
+  - job_name: 'ollama'
+    static_configs:
+      - targets: ['ollama:11434']
+    metrics_path: '/metrics'
+    scrape_interval: 30s
+
+  # Quantum Computing Metrics (when available)
+  - job_name: 'quantum-processor'
+    static_configs:
+      - targets: ['quantum-processor:8080']
+    metrics_path: '/metrics'
+    scrape_interval: 60s
+
+  # Digital Twin Metrics
+  - job_name: 'digital-twin'
+    static_configs:
+      - targets: ['digital-twin:8081']
+    metrics_path: '/metrics'
+    scrape_interval: 30s
+
+  # Chaos Engineering Metrics
+  - job_name: 'chaos-orchestrator'
+    static_configs:
+      - targets: ['chaos-orchestrator:8082']
+    metrics_path: '/metrics'
+    scrape_interval: 60s
+
+  # Kubernetes Monitoring
+  - job_name: 'kubernetes-apiservers'
+    kubernetes_sd_configs:
+      - role: endpoints
+    scheme: https
+    tls_config:
+      ca_file: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+    bearer_token_file: /var/run/secrets/kubernetes.io/serviceaccount/token
+    relabel_configs:
+      - source_labels: [__meta_kubernetes_namespace, __meta_kubernetes_service_name, __meta_kubernetes_endpoint_port_name]
+        action: keep
+        regex: default;kubernetes;https
+
+  - job_name: 'kubernetes-nodes'
+    kubernetes_sd_configs:
+      - role: node
+    scheme: https
+    tls_config:
+      ca_file: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+    bearer_token_file: /var/run/secrets/kubernetes.io/serviceaccount/token
+    relabel_configs:
+      - action: labelmap
+        regex: __meta_kubernetes_node_label_(.+)
+
+  - job_name: 'kubernetes-pods'
+    kubernetes_sd_configs:
+      - role: pod
+    relabel_configs:
+      - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scrape]
+        action: keep
+        regex: true
+      - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_path]
+        action: replace
+        target_label: __metrics_path__
+        regex: (.+)

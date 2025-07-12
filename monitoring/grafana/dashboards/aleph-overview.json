@@ -1,0 +1,22 @@
+{
+  "dashboard": {
+    "title": "Aleph AI Platform Overview",
+    "panels": [
+      {
+        "title": "Service Health",
+        "type": "stat",
+        "targets": [{"expr": "up{job=~\"aleph-.*\"}"}]
+      },
+      {
+        "title": "AI Inference Rate", 
+        "type": "graph",
+        "targets": [{"expr": "rate(ai_inference_total[5m])"}]
+      },
+      {
+        "title": "Event Store Throughput",
+        "type": "graph", 
+        "targets": [{"expr": "rate(events_stored_total[5m])"}]
+      }
+    ]
+  }
+}

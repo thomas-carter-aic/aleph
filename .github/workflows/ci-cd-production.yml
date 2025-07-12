@@ -1,0 +1,281 @@
+name: Aleph AI Platform CI/CD
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: aleph_test
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+      
+      redis:
+        image: redis:7-alpine
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 6379:6379
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '18'
+        cache: 'npm'
+        cache-dependency-path: services/*/package-lock.json
+
+    - name: Install dependencies
+      run: |
+        for service in services/*/; do
+          if [ -f "$service/package.json" ]; then
+            echo "Installing dependencies for $service"
+            cd "$service" && npm ci && cd ../..
+          fi
+        done
+
+    - name: Run unit tests
+      run: |
+        npm test --prefix tests/
+        for service in services/*/; do
+          if [ -f "$service/package.json" ]; then
+            echo "Running tests for $service"
+            cd "$service" && npm test && cd ../..
+          fi
+        done
+
+    - name: Run integration tests
+      env:
+        POSTGRES_HOST: localhost
+        POSTGRES_PORT: 5432
+        POSTGRES_DB: aleph_test
+        POSTGRES_USER: postgres
+        POSTGRES_PASSWORD: postgres
+        REDIS_HOST: localhost
+        REDIS_PORT: 6379
+      run: |
+        # Start services in background for integration tests
+        cd services/auth-service && npm start &
+        cd ../data-service && npm start &
+        cd ../ai-service && npm start &
+        cd ../paas-service && npm start &
+        
+        # Wait for services to start
+        sleep 30
+        
+        # Run integration tests
+        npm run test:integration --prefix tests/
+
+    - name: Run security audit
+      run: |
+        for service in services/*/; do
+          if [ -f "$service/package.json" ]; then
+            cd "$service" && npm audit --audit-level high && cd ../..
+          fi
+        done
+
+    - name: Lint code
+      run: |
+        for service in services/*/; do
+          if [ -f "$service/package.json" ]; then
+            cd "$service" && npm run lint || true && cd ../..
+          fi
+        done
+
+  build:
+    needs: test
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+
+    - name: Log in to Container Registry
+      uses: docker/login-action@v3
+      with:
+        registry: ${{ env.REGISTRY }}
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Build and push Docker images
+      run: |
+        for service in services/*/; do
+          if [ -f "$service/Dockerfile" ]; then
+            service_name=$(basename "$service")
+            echo "Building $service_name"
+            
+            docker build \
+              --tag ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/$service_name:latest \
+              --tag ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/$service_name:${{ github.sha }} \
+              "$service"
+            
+            docker push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/$service_name:latest
+            docker push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/$service_name:${{ github.sha }}
+          fi
+        done
+
+    - name: Build monitoring images
+      run: |
+        # Build custom Prometheus image with Aleph configuration
+        docker build \
+          --tag ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/prometheus:latest \
+          --file monitoring/prometheus/Dockerfile \
+          monitoring/prometheus/
+        
+        docker push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/prometheus:latest
+
+  deploy-staging:
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    environment: staging
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Setup kubectl
+      uses: azure/setup-kubectl@v3
+      with:
+        version: 'v1.28.0'
+
+    - name: Configure kubectl
+      run: |
+        echo "${{ secrets.KUBE_CONFIG }}" | base64 -d > kubeconfig
+        export KUBECONFIG=kubeconfig
+
+    - name: Deploy to staging
+      run: |
+        # Update image tags in Kubernetes manifests
+        sed -i "s|:latest|:${{ github.sha }}|g" infrastructure/kubernetes/production/aleph-services.yaml
+        
+        # Apply Kubernetes manifests
+        kubectl apply -f infrastructure/kubernetes/production/aleph-services.yaml
+        
+        # Wait for deployment to complete
+        kubectl rollout status deployment/api-gateway -n aleph-production
+        kubectl rollout status deployment/auth-service -n aleph-production
+        kubectl rollout status deployment/data-service -n aleph-production
+        kubectl rollout status deployment/ai-service -n aleph-production
+        kubectl rollout status deployment/paas-service -n aleph-production
+
+    - name: Run smoke tests
+      run: |
+        # Wait for services to be ready
+        sleep 60
+        
+        # Get service endpoints
+        API_GATEWAY_URL=$(kubectl get service api-gateway -n aleph-production -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
+        
+        # Run smoke tests
+        curl -f http://$API_GATEWAY_URL/health || exit 1
+        curl -f http://$API_GATEWAY_URL/api/v1/models || exit 1
+
+  deploy-production:
+    needs: deploy-staging
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    environment: production
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Setup kubectl
+      uses: azure/setup-kubectl@v3
+
+    - name: Configure kubectl for production
+      run: |
+        echo "${{ secrets.PROD_KUBE_CONFIG }}" | base64 -d > kubeconfig
+        export KUBECONFIG=kubeconfig
+
+    - name: Deploy to production
+      run: |
+        # Update image tags
+        sed -i "s|:latest|:${{ github.sha }}|g" infrastructure/kubernetes/production/aleph-services.yaml
+        
+        # Apply with rolling update strategy
+        kubectl apply -f infrastructure/kubernetes/production/aleph-services.yaml
+        
+        # Monitor deployment
+        kubectl rollout status deployment/api-gateway -n aleph-production --timeout=600s
+        kubectl rollout status deployment/auth-service -n aleph-production --timeout=600s
+        kubectl rollout status deployment/data-service -n aleph-production --timeout=600s
+        kubectl rollout status deployment/ai-service -n aleph-production --timeout=600s
+        kubectl rollout status deployment/paas-service -n aleph-production --timeout=600s
+
+    - name: Post-deployment verification
+      run: |
+        # Comprehensive health checks
+        API_GATEWAY_URL=$(kubectl get service api-gateway -n aleph-production -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
+        
+        # Test all service endpoints
+        curl -f http://$API_GATEWAY_URL/health
+        curl -f http://$API_GATEWAY_URL/api/v1/models
+        curl -f http://$API_GATEWAY_URL/api/v1/agents
+        
+        # Test AI inference
+        curl -X POST http://$API_GATEWAY_URL/api/v1/inference/llama2-7b \
+          -H "Content-Type: application/json" \
+          -d '{"input": {"prompt": "Health check"}, "parameters": {"temperature": 0.1}}'
+
+    - name: Notify deployment success
+      if: success()
+      run: |
+        echo "🚀 Aleph AI Platform successfully deployed to production!"
+        echo "Deployment SHA: ${{ github.sha }}"
+        echo "Services: API Gateway, Auth, Data, AI, PaaS"
+        echo "Advanced patterns: Quantum, ZK, Temporal, Chaos, Digital Twin"
+
+  performance-test:
+    needs: deploy-production
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Run performance tests
+      run: |
+        # Install k6 for load testing
+        sudo apt-key adv --keyserver hkp://keyserver.ubuntu.com:80 --recv-keys C5AD17C747E3415A3642D57D77C6C491D6AC1D69
+        echo "deb https://dl.k6.io/deb stable main" | sudo tee /etc/apt/sources.list.d/k6.list
+        sudo apt-get update
+        sudo apt-get install k6
+        
+        # Run load tests
+        k6 run tests/performance/load-test.js
+
+    - name: Generate performance report
+      run: |
+        echo "Performance test completed"
+        echo "Results available in k6 output"

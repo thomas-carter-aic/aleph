@@ -1,0 +1,321 @@
+# Complete Kubernetes Deployment for Aleph AI Platform
+# Production-ready manifests with all services
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: aleph-production
+  labels:
+    name: aleph-production
+    environment: production
+---
+# API Gateway Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api-gateway
+  namespace: aleph-production
+  labels:
+    app: api-gateway
+    component: gateway
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: api-gateway
+  template:
+    metadata:
+      labels:
+        app: api-gateway
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "3000"
+        prometheus.io/path: "/metrics"
+    spec:
+      containers:
+      - name: api-gateway
+        image: aleph/api-gateway:latest
+        ports:
+        - containerPort: 3000
+        env:
+        - name: NODE_ENV
+          value: "production"
+        - name: AUTH_SERVICE_URL
+          value: "http://auth-service:3001"
+        - name: AI_SERVICE_URL
+          value: "http://ai-service:3003"
+        - name: DATA_SERVICE_URL
+          value: "http://data-service:3002"
+        - name: PAAS_SERVICE_URL
+          value: "http://paas-service:3004"
+        resources:
+          requests:
+            cpu: 200m
+            memory: 256Mi
+          limits:
+            cpu: 500m
+            memory: 512Mi
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 3000
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 3000
+          initialDelaySeconds: 5
+          periodSeconds: 5
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: api-gateway
+  namespace: aleph-production
+spec:
+  selector:
+    app: api-gateway
+  ports:
+  - port: 80
+    targetPort: 3000
+  type: LoadBalancer
+---
+# Auth Service Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: auth-service
+  namespace: aleph-production
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: auth-service
+  template:
+    metadata:
+      labels:
+        app: auth-service
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "3001"
+    spec:
+      containers:
+      - name: auth-service
+        image: aleph/auth-service:latest
+        ports:
+        - containerPort: 3001
+        env:
+        - name: NODE_ENV
+          value: "production"
+        - name: JWT_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: aleph-secrets
+              key: jwt-secret
+        - name: POSTGRES_HOST
+          value: "postgres"
+        - name: REDIS_HOST
+          value: "redis"
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+          limits:
+            cpu: 300m
+            memory: 256Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: auth-service
+  namespace: aleph-production
+spec:
+  selector:
+    app: auth-service
+  ports:
+  - port: 3001
+    targetPort: 3001
+---
+# Data Service Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: data-service
+  namespace: aleph-production
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: data-service
+  template:
+    metadata:
+      labels:
+        app: data-service
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "3002"
+    spec:
+      containers:
+      - name: data-service
+        image: aleph/data-service:latest
+        ports:
+        - containerPort: 3002
+        env:
+        - name: NODE_ENV
+          value: "production"
+        - name: POSTGRES_HOST
+          value: "postgres"
+        - name: REDIS_HOST
+          value: "redis"
+        - name: KAFKA_BROKER
+          value: "kafka:9092"
+        resources:
+          requests:
+            cpu: 200m
+            memory: 256Mi
+          limits:
+            cpu: 500m
+            memory: 512Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: data-service
+  namespace: aleph-production
+spec:
+  selector:
+    app: data-service
+  ports:
+  - port: 3002
+    targetPort: 3002
+---
+# AI Service Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ai-service
+  namespace: aleph-production
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: ai-service
+  template:
+    metadata:
+      labels:
+        app: ai-service
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "3003"
+    spec:
+      containers:
+      - name: ai-service
+        image: aleph/ai-service:latest
+        ports:
+        - containerPort: 3003
+        env:
+        - name: NODE_ENV
+          value: "production"
+        - name: OLLAMA_ENDPOINT
+          value: "http://ollama:11434"
+        - name: QUANTUM_ENDPOINT
+          value: "http://quantum-processor:8080"
+        - name: CAUSAL_ENDPOINT
+          value: "http://causal-analyzer:8081"
+        resources:
+          requests:
+            cpu: 500m
+            memory: 512Mi
+          limits:
+            cpu: 1000m
+            memory: 1Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ai-service
+  namespace: aleph-production
+spec:
+  selector:
+    app: ai-service
+  ports:
+  - port: 3003
+    targetPort: 3003
+---
+# PaaS Service Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: paas-service
+  namespace: aleph-production
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: paas-service
+  template:
+    metadata:
+      labels:
+        app: paas-service
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "3004"
+    spec:
+      containers:
+      - name: paas-service
+        image: aleph/paas-service:latest
+        ports:
+        - containerPort: 3004
+        env:
+        - name: NODE_ENV
+          value: "production"
+        volumeMounts:
+        - name: docker-sock
+          mountPath: /var/run/docker.sock
+        resources:
+          requests:
+            cpu: 300m
+            memory: 256Mi
+          limits:
+            cpu: 600m
+            memory: 512Mi
+      volumes:
+      - name: docker-sock
+        hostPath:
+          path: /var/run/docker.sock
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: paas-service
+  namespace: aleph-production
+spec:
+  selector:
+    app: paas-service
+  ports:
+  - port: 3004
+    targetPort: 3004
+---
+# Secrets
+apiVersion: v1
+kind: Secret
+metadata:
+  name: aleph-secrets
+  namespace: aleph-production
+type: Opaque
+data:
+  jwt-secret: YWxlcGgtc3VwZXItc2VjcmV0LWtleQ== # base64 encoded
+  postgres-password: YWxlcGgxMjM= # base64 encoded
+---
+# ConfigMap for application configuration
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: aleph-config
+  namespace: aleph-production
+data:
+  environment: "production"
+  log-level: "info"
+  metrics-enabled: "true"
+  tracing-enabled: "true"
