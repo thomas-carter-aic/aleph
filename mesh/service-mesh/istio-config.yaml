@@ -1,0 +1,114 @@
+# Service Mesh Configuration for Aleph AI Platform
+# Istio integration with advanced traffic management and security
+
+apiVersion: install.istio.io/v1alpha1
+kind: IstioOperator
+metadata:
+  name: aleph-istio
+  namespace: istio-system
+spec:
+  values:
+    global:
+      meshID: aleph-mesh
+      multiCluster:
+        clusterName: aleph-cluster
+      network: aleph-network
+    pilot:
+      env:
+        EXTERNAL_ISTIOD: false
+  components:
+    pilot:
+      k8s:
+        resources:
+          requests:
+            cpu: 500m
+            memory: 2048Mi
+    ingressGateways:
+    - name: istio-ingressgateway
+      enabled: true
+      k8s:
+        service:
+          type: LoadBalancer
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+    egressGateways:
+    - name: istio-egressgateway
+      enabled: true
+---
+# AI Agent Service Mesh Configuration
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: ai-agent-routing
+  namespace: aleph-ai
+spec:
+  hosts:
+  - ai-agents.aleph.local
+  http:
+  - match:
+    - headers:
+        agent-type:
+          exact: security
+    route:
+    - destination:
+        host: security-agent-service
+        port:
+          number: 8080
+  - match:
+    - headers:
+        agent-type:
+          exact: optimization
+    route:
+    - destination:
+        host: optimization-agent-service
+        port:
+          number: 8080
+  - match:
+    - headers:
+        agent-type:
+          exact: compliance
+    route:
+    - destination:
+        host: compliance-agent-service
+        port:
+          number: 8080
+---
+# Quantum Computing Service Configuration
+apiVersion: networking.istio.io/v1beta1
+kind: DestinationRule
+metadata:
+  name: quantum-processor-dr
+  namespace: aleph-ai
+spec:
+  host: quantum-processor-service
+  trafficPolicy:
+    tls:
+      mode: ISTIO_MUTUAL
+    connectionPool:
+      tcp:
+        maxConnections: 10
+      http:
+        http1MaxPendingRequests: 10
+        maxRequestsPerConnection: 2
+    circuitBreaker:
+      consecutiveErrors: 3
+      interval: 30s
+      baseEjectionTime: 30s
+---
+# Zero-Knowledge Privacy Service
+apiVersion: networking.istio.io/v1beta1
+kind: ServiceEntry
+metadata:
+  name: zk-privacy-external
+  namespace: aleph-system
+spec:
+  hosts:
+  - zk-privacy.external.com
+  ports:
+  - number: 443
+    name: https
+    protocol: HTTPS
+  location: MESH_EXTERNAL
+  resolution: DNS
