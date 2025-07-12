@@ -12,11 +12,20 @@ services:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+      - ./database/migrations:/docker-entrypoint-initdb.d
 
   redis:
     image: redis:7-alpine
     ports:
       - "6379:6379"
+    volumes:
+      - redis_data:/data
+
+  zookeeper:
+    image: confluentinc/cp-zookeeper:latest
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
 
   kafka:
     image: confluentinc/cp-kafka:latest
@@ -28,12 +37,6 @@ services:
       - "9092:9092"
     depends_on:
       - zookeeper
-
-  zookeeper:
-    image: confluentinc/cp-zookeeper:latest
-    environment:
-      ZOOKEEPER_CLIENT_PORT: 2181
-      ZOOKEEPER_TICK_TIME: 2000
 
   # MinIO for S3-compatible storage
   minio:
@@ -56,7 +59,68 @@ services:
     volumes:
       - ollama_data:/root/.ollama
 
+  # Aleph Services
+  api-gateway:
+    build: ./services/api-gateway
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=development
+      - AUTH_SERVICE_URL=http://auth-service:3001
+      - AI_SERVICE_URL=http://ai-service:3003
+      - DATA_SERVICE_URL=http://data-service:3002
+    depends_on:
+      - auth-service
+      - ai-service
+      - data-service
+
+  auth-service:
+    build: ./services/auth-service
+    ports:
+      - "3001:3001"
+    environment:
+      - NODE_ENV=development
+      - JWT_SECRET=aleph-super-secret-key
+      - REDIS_HOST=redis
+      - POSTGRES_HOST=postgres
+      - POSTGRES_DB=aleph
+      - POSTGRES_USER=aleph
+      - POSTGRES_PASSWORD=aleph123
+    depends_on:
+      - postgres
+      - redis
+
+  data-service:
+    build: ./services/data-service
+    ports:
+      - "3002:3002"
+    environment:
+      - NODE_ENV=development
+      - POSTGRES_HOST=postgres
+      - POSTGRES_DB=aleph
+      - POSTGRES_USER=aleph
+      - POSTGRES_PASSWORD=aleph123
+      - REDIS_HOST=redis
+      - KAFKA_BROKER=kafka:9092
+    depends_on:
+      - postgres
+      - redis
+      - kafka
+
+  ai-service:
+    build: ./services/ai-service
+    ports:
+      - "3003:3003"
+    environment:
+      - NODE_ENV=development
+      - OLLAMA_ENDPOINT=http://ollama:11434
+      - QUANTUM_ENDPOINT=http://localhost:8080
+      - CAUSAL_ENDPOINT=http://localhost:8081
+    depends_on:
+      - ollama
+
 volumes:
   postgres_data:
+  redis_data:
   minio_data:
   ollama_data:
